@@ -19,7 +19,8 @@
 #endif
 
 #include "SDL.h"
-#include <SDL_image.h>
+#include "SDL_image.h"
+#include "SDL_ttf.h"
 #include <atomic>
 
 struct FrameData
@@ -105,6 +106,18 @@ void render(SDL_Renderer* renderer, int frameWidth, int frameHeight) {
     if (flag != IMG_INIT_JPG) {
         return;
     }
+
+    flag = TTF_Init();
+    if (flag != 0) {
+        return;
+    }
+
+    TTF_Font* Sans = TTF_OpenFont("FreeSans.ttf", 24);
+
+    if (Sans == NULL) {
+        return;
+    }
+
     bool interrupt = true;
 
     while (interrupt) {
@@ -127,6 +140,25 @@ void render(SDL_Renderer* renderer, int frameWidth, int frameHeight) {
             break;
         }
 
+        
+        SDL_Color White = { 255, 255, 255, 255 };
+        SDL_Surface* textSurface =
+            TTF_RenderText_Solid(Sans, "put your text here", White);
+        if (textSurface == nullptr) {
+            std::cerr << "Text render error: " << TTF_GetError() << std::endl;
+            return;
+        }
+        SDL_Texture* textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+        SDL_FreeSurface(textSurface);
+
+        SDL_Rect Message_rect = { 0, 0, textSurface->w, textSurface->h };
+
+        SDL_RenderCopy(renderer, textTexture, NULL, &Message_rect);
+        SDL_RenderPresent(renderer);
+
+        // Don't forget to free your surface and texture
+        SDL_DestroyTexture(textTexture);
+
         std::lock_guard<std::mutex> lock(queueMutex);
         if (frameQueue.empty()) {
             // Ограничение частоты кадров
@@ -144,7 +176,7 @@ void render(SDL_Renderer* renderer, int frameWidth, int frameHeight) {
             std::cerr << "Failed to create SDL_RWops from memory" << std::endl;
             continue;
         }
-
+        
         SDL_Surface* frame = IMG_Load_RW(rw, 0);
 
         if (frame == NULL) {
@@ -166,7 +198,7 @@ void render(SDL_Renderer* renderer, int frameWidth, int frameHeight) {
         }
 
         // Очистка рендера и отрисовка текстуры
-        SDL_RenderClear(renderer);
+        //SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, frameTexture, NULL, NULL);
         SDL_RenderPresent(renderer);
 
@@ -175,6 +207,8 @@ void render(SDL_Renderer* renderer, int frameWidth, int frameHeight) {
 
     }
     IMG_Quit();
+    TTF_CloseFont(Sans);
+    TTF_Quit();
 }
 
 void receive(int sock) {

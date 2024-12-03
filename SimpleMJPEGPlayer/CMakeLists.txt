@@ -17,6 +17,22 @@ if(WIN32)
     set(SDL2_IMAGE_INCLUDE_DIR "${SDL2_IMAGE_DIR}/include")
     set(SDL2_IMAGE_LIBRARY "${SDL2_IMAGE_DIR}/lib/x64/SDL2_image.lib")
 
+    set(SDL2_TTF_DIR "C:/libs/SDL2/SDL2_Ttf")
+    set(SDL2_TTF_INCLUDE_DIR "${SDL2_TTF_DIR}/include")
+    set(SDL2_TTF_LIBRARY "${SDL2_TTF_DIR}/lib/x64/SDL2_Ttf.lib")
+
+    if (NOT SDL2_INCLUDE_DIR)
+        message(FATAL_ERROR "SDL2 include dir not found")
+    endif()
+
+    if (NOT SDL2_IMAGE_INCLUDE_DIR)
+        message(FATAL_ERROR "SDL2_IMAGE include dir not found")
+    endif()
+
+    if (NOT SDL2_TTF_INCLUDE_DIR)
+        message(FATAL_ERROR "SDL2_TTF include dir not found")
+    endif()
+
     add_custom_command(TARGET SimpleMJPEGPlayer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${SDL2_DIR}/lib/x64/SDL2.dll"
@@ -27,8 +43,18 @@ if(WIN32)
         "${SDL2_IMAGE_DIR}/lib/x64/SDL2_image.dll"
         $<TARGET_FILE_DIR:SimpleMJPEGPlayer>)
 
-    target_include_directories(SimpleMJPEGPlayer PRIVATE ${SDL2_INCLUDE_DIR} ${SDL2_IMAGE_INCLUDE_DIR})
-    target_link_libraries(SimpleMJPEGPlayer PRIVATE ${SDL2_LIBRARY} ${SDL2_MAIN_LIB} ${SDL2_IMAGE_LIBRARY})
+    add_custom_command(TARGET SimpleMJPEGPlayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${SDL2_TTF_DIR}/lib/x64/SDL2_ttf.dll"
+        $<TARGET_FILE_DIR:SimpleMJPEGPlayer>)
+
+    add_custom_command(TARGET SimpleMJPEGPlayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/FreeSans.ttf"
+        $<TARGET_FILE_DIR:SimpleMJPEGPlayer>)
+
+    target_include_directories(SimpleMJPEGPlayer PRIVATE ${SDL2_INCLUDE_DIR} ${SDL2_IMAGE_INCLUDE_DIR} ${SDL2_TTF_INCLUDE_DIR})
+    target_link_libraries(SimpleMJPEGPlayer PRIVATE ${SDL2_LIBRARY} ${SDL2_MAIN_LIB} ${SDL2_IMAGE_LIBRARY} ${SDL2_TTF_LIBRARY})
 else()
     find_package(SDL2 REQUIRED)
     include_directories(headers ${SDL2_INCLUDE_DIRS})
