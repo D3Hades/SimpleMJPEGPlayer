@@ -6,6 +6,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <string>
+#include <map>
+#include <atomic>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -21,7 +23,6 @@
 #include "SDL.h"
 #include "SDL_image.h"
 #include "SDL_ttf.h"
-#include <atomic>
 
 struct FrameData
 {
@@ -31,7 +32,13 @@ struct FrameData
 
 std::mutex queueMutex;
 std::queue<FrameData> frameQueue;
+std::map<int, FrameData> rawFrameBuffer;
+
 std::atomic_bool running;
+std::atomic<int> totalPackets = 0;
+std::atomic<int> goodPackets = 0;
+std::atomic<int> badPackets = 0;
+std::atomic<int> goodFrames = 0;
 std::condition_variable cv;
 
 bool sockInit(void) {
@@ -56,10 +63,12 @@ int createUDPSocket(int port) {
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = INADDR_ANY;
+    int bindResult = bind(sockfd, (sockaddr*)&addr, sizeof(addr));
 
-    if (bind(sockfd, (sockaddr*)&addr, sizeof(addr)) < 0) {
+    if (bindResult < 0) {
         std::cerr << "Error binding socket\n";
         #ifdef _WIN32
+        std::cerr << "WSA Error: " << WSAGetLastError() << std::endl;
         closesocket(sockfd);
         WSACleanup();
         #else
@@ -101,6 +110,37 @@ void cleanup(SDL_Window* window, SDL_Renderer* renderer) {
     #endif
 }
 
+void renderText(SDL_Color color, const char *text, TTF_Font *font, SDL_Renderer* renderer, SDL_Rect *textRect) {
+    SDL_Surface* textSurface =
+        TTF_RenderText_Solid(font, text, color);
+    if (textSurface == nullptr) {
+        std::cerr << "Text render error: " << TTF_GetError() << std::endl;
+        return;
+    }
+
+    SDL_Texture* textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+    SDL_FreeSurface(textSurface);
+
+    SDL_RenderCopy(renderer, textTexture, NULL, textRect);
+    //SDL_RenderPresent(renderer);
+
+    SDL_DestroyTexture(textTexture);
+}
+
+void loadTexture(SDL_Texture*& dest, SDL_Renderer* renderer, FrameData* data) {
+    char* dataPtr = data->data;
+    void* buffer = reinterpret_cast<void*>(dataPtr);
+    SDL_RWops* rw = SDL_RWFromMem(buffer, data->dataSize);
+    if (!rw) {
+        std::cerr << "Failed to create SDL_RWops from memory" << std::endl;
+        return;
+    }
+
+    dest = IMG_LoadTextureTyped_RW(renderer, rw, 1, "JPG");
+
+    free(reinterpret_cast<void*>(dataPtr));
+}
+
 void render(SDL_Renderer* renderer, int frameWidth, int frameHeight) {
     int flag = IMG_Init(IMG_INIT_JPG);
     if (flag != IMG_INIT_JPG) {
@@ -119,6 +159,9 @@ void render(SDL_Renderer* renderer, int frameWidth, int frameHeight) {
     }
 
     bool interrupt = true;
+    SDL_Texture* activeTexture = nullptr;
+    uint64_t workTime = SDL_GetTicks();
+    uint64_t prevWorkTime = workTime;
 
     while (interrupt) {
         SDL_Event event;
@@ -140,72 +183,55 @@ void render(SDL_Renderer* renderer, int frameWidth, int frameHeight) {
             break;
         }
 
-        
-        SDL_Color White = { 255, 255, 255, 255 };
-        SDL_Surface* textSurface =
-            TTF_RenderText_Solid(Sans, "put your text here", White);
-        if (textSurface == nullptr) {
-            std::cerr << "Text render error: " << TTF_GetError() << std::endl;
-            return;
+        workTime = SDL_GetTicks64();
+        uint64_t delta = workTime - prevWorkTime;
+        if (delta > 1000 / FPS) {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            if (!frameQueue.empty()) {
+                if (activeTexture != nullptr) {
+                    SDL_DestroyTexture(activeTexture);
+                }
+                FrameData data = std::move(frameQueue.front());
+                frameQueue.pop();
+                loadTexture(activeTexture, renderer, &data);
+            }
+
+            SDL_RenderClear(renderer);
+
+            // Отрисовка текстуры
+            if (activeTexture != nullptr) {
+                SDL_RenderCopy(renderer, activeTexture, NULL, NULL);
+            }
+
+            SDL_Color whiteColor = { 255, 255, 255, 255 };
+
+            std::string text = std::to_string(totalPackets) + "/" +
+                std::to_string(badPackets) + "/" +
+                std::to_string(goodPackets) + "/" +
+                std::to_string(goodFrames);
+
+            int text_w = 0;
+            int text_h = 0;
+            TTF_SizeText(Sans, text.c_str(), &text_w, &text_h);
+            SDL_Rect Message_rect = { 0, 0, text_w, text_h };
+
+            renderText(whiteColor, text.c_str(), Sans, renderer, &Message_rect);
+
+            text = "UI FPS: " + std::to_string(1000 / delta);
+            TTF_SizeText(Sans, text.c_str(), &text_w, &text_h);
+            Message_rect = { 0, text_h + 5, text_w, text_h };
+            renderText(whiteColor, text.c_str(), Sans, renderer, &Message_rect);
+
+            SDL_RenderPresent(renderer);
+
+            prevWorkTime = workTime;
         }
-        SDL_Texture* textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
-        SDL_FreeSurface(textSurface);
-
-        SDL_Rect Message_rect = { 0, 0, textSurface->w, textSurface->h };
-
-        SDL_RenderCopy(renderer, textTexture, NULL, &Message_rect);
-        SDL_RenderPresent(renderer);
-
-        // Don't forget to free your surface and texture
-        SDL_DestroyTexture(textTexture);
-
-        std::lock_guard<std::mutex> lock(queueMutex);
-        if (frameQueue.empty()) {
-            // Ограничение частоты кадров
-            SDL_Delay(1000 / FPS); // fps lock
-            continue;
-        }
-
-        FrameData data = std::move(frameQueue.front());
-        frameQueue.pop();
-        char* dataPtr = data.data;
-        void* buffer = reinterpret_cast<void*>(dataPtr);
-
-        SDL_RWops* rw = SDL_RWFromMem(buffer, data.dataSize);
-        if (!rw) {
-            std::cerr << "Failed to create SDL_RWops from memory" << std::endl;
-            continue;
-        }
-        
-        SDL_Surface* frame = IMG_Load_RW(rw, 0);
-
-        if (frame == NULL) {
-            SDL_FreeRW(rw);
-            free(reinterpret_cast<void*>(dataPtr));
-            std::cerr << "SDL_Init Error:" << SDL_GetError() << std::endl;
-            SDL_Log(SDL_GetError());
-            std::cerr << "Failed to load image from memory" << std::endl;
-
-            continue;
-        }
-
-        SDL_Texture* frameTexture = SDL_CreateTextureFromSurface(renderer, frame);
-        SDL_FreeSurface(frame);
-        free(reinterpret_cast<void*>(dataPtr));
-        if (!frameTexture) {
-            std::cerr << "Failed to create texture from surface" << std::endl;
-            continue;
-        }
-
-        // Очистка рендера и отрисовка текстуры
-        //SDL_RenderClear(renderer);
-        SDL_RenderCopy(renderer, frameTexture, NULL, NULL);
-        SDL_RenderPresent(renderer);
-
-        // Освобождение текстуры после отрисовки
-        SDL_DestroyTexture(frameTexture);
-
     }
+    // Освобождение текстуры
+    if (activeTexture != nullptr) {
+        SDL_DestroyTexture(activeTexture);
+    }
+
     IMG_Quit();
     TTF_CloseFont(Sans);
     TTF_Quit();
@@ -240,9 +266,13 @@ void receive(int sock) {
             return;
         }
 
+        totalPackets++;
+
         if (bytesReceived != PACKET_SIZE) {
+            badPackets++;
             continue;
         }
+
         uint16_t payloadSize = reinterpret_cast<unsigned char&>(packet[0]) << 8 | reinterpret_cast<unsigned char&>(packet[1]);
         uint16_t frameNum = reinterpret_cast<unsigned char&>(packet[2]) << 8 | reinterpret_cast<unsigned char&>(packet[3]);
         uint16_t packetNum = reinterpret_cast<unsigned char&>(packet[4]) << 8 | reinterpret_cast<unsigned char&>(packet[5]);
@@ -263,6 +293,7 @@ void receive(int sock) {
             currentFrame = frameNum;
         }
         if (currentFrame != frameNum) {
+            badPackets++;
             continue;
         }
         size_t requiredSize = (packetNum * PAYLOAD_SIZE) + payloadSize;
@@ -285,6 +316,9 @@ void receive(int sock) {
         totalFragments++;
 
         bufferIndex += payloadSize;
+
+        goodPackets++;
+
         if (!isLastPacket) {
             continue;
         }
@@ -309,9 +343,12 @@ void receive(int sock) {
         char first = static_cast<char>(0xFF);
         char second = static_cast<char>(0xD9);
 
+
         if (f != first && s != second) {
             continue;
         }
+
+        goodFrames++;
 
         std::lock_guard<std::mutex> lock(queueMutex);
         // Добавление в очередь
