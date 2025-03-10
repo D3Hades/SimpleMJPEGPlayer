@@ -26,6 +26,12 @@ constexpr size_t PAYLOAD_SIZE = 1300;
 // Начальный размер буфера
 constexpr size_t BUFFER_SIZE = 10000;
 
+struct FrameData
+{
+    char* data;
+    int dataSize;
+};
+
 bool sockInit(void);
 int createUDPSocket(int port);
 bool initSDL(SDL_Window*& window, SDL_Renderer*& renderer, int width, int height);
